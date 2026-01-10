@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8"/>
+  <title>WorldMorse Peer (WebRTC Minimal)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 16px auto; }
+    input, button, select { padding: 6px 8px; margin: 4px; }
+    #log { white-space: pre-wrap; border: 1px solid #ccc; padding: 10px; height: 320px; overflow: auto; }
+    #chat { white-space: pre-wrap; border: 1px solid #ccc; padding: 10px; height: 160px; overflow: auto; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .box { border: 1px solid #ddd; padding: 10px; border-radius: 8px; margin-top: 10px; }
+    label { font-size: 12px; color: #444; }
+  </style>
+</head>
+<body>
+  <h2>WorldMorse Peer (Prototype: WebRTC DataChannel)</h2>
+
+  <div class="box">
+    <div class="row">
+      <label>Central</label>
+      <input id="central" class="mono" size="34" value="http://127.0.0.1:8080">
+      <label>Room</label>
+      <input id="room" class="mono" size="18" value="wm-hf-7000-7200">
+      <label>Callsign</label>
+      <input id="callsign" class="mono" size="8" value="JA1AAA">
+    </div>
+
+    <div class="row">
+      <button id="genKey">鍵生成</button>
+      <button id="register">登録</button>
+      <button id="issue">トークン発行</button>
+      <button id="start">起動（presence）</button>
+      <button id="refreshPeers">peers更新</button>
+      <select id="peerSelect" class="mono"></select>
+      <button id="connect">選択peerへ接続</button>
+      <span class="mono" id="state"></span>
+    </div>
+  </div>
+
+  <div class="box">
+    <div class="row">
+      <label>Send</label>
+      <input id="msg" class="mono" size="60" placeholder="hello">
+      <button id="send">送信</button>
+    </div>
+    <div id="chat" class="mono"></div>
+  </div>
+
+  <pre id="log" class="mono"></pre>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function log(s){
+    const el = $("log");
+    el.textContent += s + "\n";
+    el.scrollTop = el.scrollHeight;
+  }
+  function chat(s){
+    const el = $("chat");
+    el.textContent += s + "\n";
+    el.scrollTop = el.scrollHeight;
+  }
+  function setState(s){ $("state").textContent = s; }
+
+  // --------- identity ----------
+  let privKey = null;
+  let pubJwk = null;
+  let token = null;
+  const peerId = crypto.randomUUID();
+
+  function utf8(s){ return new TextEncoder().encode(s); }
+
+  function base64urlFromBytes(bytes) {
+    let s = "";
+    for (const b of bytes) s += String.fromCharCode(b);
+    return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");
+  }
+
+  function toFixed32(arr) {
+    while (arr.length > 0 && arr[0] === 0x00) arr = arr.slice(1);
+    if (arr.length > 32) arr = arr.slice(arr.length - 32);
+    if (arr.length < 32) {
+      const out = new Uint8Array(32);
+      out.set(arr, 32 - arr.length);
+      return out;
+    }
+    return new Uint8Array(arr);
+  }
+
+  function parseDerToRaw64(sigBytes) {
+    const der = sigBytes;
+
+    function readLen(a, i) {
+      let len = a[i++];
+      if (len & 0x80) {
+        const n = len & 0x7f;
+        if (n === 0 || n > 4) throw new Error("bad der len");
+        len = 0;
+        for (let k = 0; k < n; k++) len = (len << 8) | a[i++];
+      }
+      return [len, i];
+    }
+    function readInt(a, i) {
+      if (a[i++] !== 0x02) throw new Error("bad der int tag");
+      let len; [len, i] = readLen(a, i);
+      const v = a.slice(i, i + len);
+      return [v, i + len];
+    }
+
+    let i = 0;
+    if (der[i++] !== 0x30) throw new Error("bad der seq tag");
+    let seqLen; [seqLen, i] = readLen(der, i);
+
+    let rBytes; [rBytes, i] = readInt(der, i);
+    let sBytes; [sBytes, i] = readInt(der, i);
+
+    const r32 = toFixed32(rBytes);
+    const s32 = toFixed32(sBytes);
+    const raw = new Uint8Array(64);
+    raw.set(r32, 0);
+    raw.set(s32, 32);
+    return raw;
+  }
+
+  function parseConcatToRaw64(sigBytes) {
+    if (sigBytes.length % 2 !== 0) throw new Error("concat length odd");
+    const half = sigBytes.length / 2;
+    const r = sigBytes.slice(0, half);
+    const s = sigBytes.slice(half);
+    const r32 = toFixed32(r);
+    const s32 = toFixed32(s);
+    const raw = new Uint8Array(64);
+    raw.set(r32, 0);
+    raw.set(s32, 32);
+    return raw;
+  }
+
+  async function signRaw(msgBytes) {
+    if (!privKey) throw new Error("no key");
+    const sigBuf = await crypto.subtle.sign({ name:"ECDSA", hash:"SHA-256" }, privKey, msgBytes);
+    const sig = new Uint8Array(sigBuf);
+
+    if (sig.length === 64) return base64urlFromBytes(sig);
+    if (sig.length >= 8 && sig[0] === 0x30) return base64urlFromBytes(parseDerToRaw64(sig));
+    if (sig.length >= 2 && sig.length % 2 === 0) return base64urlFromBytes(parseConcatToRaw64(sig));
+
+    throw new Error("unsupported signature format len=" + sig.length);
+  }
+
+  async function api(path, opts={}) {
+    const base = $("central").value.trim();
+    const url = base + path;
+    const headers = opts.headers || {};
+    if (token) headers["Authorization"] = "Bearer " + token;
+    headers["Content-Type"] = "application/json";
+
+    const res = await fetch(url, {...opts, headers});
+    const text = await res.text();
+    if (!res.ok) {
+      log(`HTTP ${res.status} ${url} => ${text}`);
+      throw new Error(text);
+    }
+    return JSON.parse(text);
+  }
+
+  async function genKey() {
+    const kp = await crypto.subtle.generateKey(
+      {name:"ECDSA", namedCurve:"P-256"},
+      true,
+      ["sign","verify"]
+    );
+    privKey = kp.privateKey;
+    pubJwk = await crypto.subtle.exportKey("jwk", kp.publicKey);
+    log("Key generated. peer_id=" + peerId);
+  }
+
+  async function register() {
+    const callsign = $("callsign").value.trim().toUpperCase();
+    const nonce = crypto.randomUUID();
+    const msg = `register|${callsign}|${nonce}`;
+    const sig = await signRaw(utf8(msg));
+
+    await api("/v1/registry/register", {
+      method:"POST",
+      body: JSON.stringify({ callsign, public_key_jwk: pubJwk, nonce, signature_b64u: sig })
+    });
+
+    log("Registered callsign=" + callsign);
+  }
+
+  async function issue() {
+    const callsign = $("callsign").value.trim().toUpperCase();
+    const room_id = $("room").value.trim();
+    const nonce = crypto.randomUUID();
+    const msg = `issue|${callsign}|${room_id}|${peerId}|${nonce}`;
+    const sig = await signRaw(utf8(msg));
+
+    const r = await api("/v1/token/issue", {
+      method:"POST",
+      body: JSON.stringify({ callsign, room_id, peer_id: peerId, nonce, signature_b64u: sig })
+    });
+
+    token = r.token;
+    log("Token issued. head=" + token.slice(0,20) + "...");
+  }
+
+  // --------- presence ----------
+  let presenceTimer = null;
+
+  async function startPresence(){
+    if(!token || token.length < 20){
+      log("ERR token missing. first issue token.");
+      return;
+    }
+    const callsign = $("callsign").value.trim().toUpperCase();
+    const room_id = $("room").value.trim();
+
+    await api(`/v1/rooms/${encodeURIComponent(room_id)}/presence/upsert`, {
+      method:"POST",
+      body: JSON.stringify({ peer_id: peerId, callsign })
+    });
+    log("Presence upsert OK (room=" + room_id + ")");
+
+    if (presenceTimer) clearInterval(presenceTimer);
+    presenceTimer = setInterval(async () => {
+      try {
+        await api(`/v1/rooms/${encodeURIComponent(room_id)}/presence/upsert`, {
+          method:"POST",
+          body: JSON.stringify({ peer_id: peerId, callsign })
+        });
+      } catch (e) {
+        log("ERR Presence beacon " + e);
+      }
+    }, 10000);
+  }
+
+  async function refreshPeers(){
+    const room_id = $("room").value.trim();
+    const r = await api(`/v1/rooms/${encodeURIComponent(room_id)}/presence`, { method:"GET" });
+    const list = r.peers || [];
+
+    const sel = $("peerSelect");
+    sel.innerHTML = "";
+
+    const me = peerId;
+    const others = list.filter(p => p.peer_id !== me);
+
+    for (const p of others){
+      const opt = document.createElement("option");
+      opt.value = p.peer_id;
+      opt.textContent = `${p.callsign}  (${p.peer_id.slice(0,8)}...)`;
+      sel.appendChild(opt);
+    }
+    log(`Peers loaded. total=${list.length} others=${others.length}`);
+  }
+
+  // --------- WebRTC ----------
+  let pc = null;
+  let dc = null;
+  let sessionId = null;
+  let pollTimer = null;
+  let pollCursor = 0;
+
+  function setupPc(isCaller){
+    pc = new RTCPeerConnection({
+      iceServers: [] // LAN/同一PC想定。後でSTUN入れるならここ。
+    });
+
+    pc.onicecandidate = async (ev) => {
+      if (!ev.candidate || !sessionId) return;
+      try {
+        await api(`/v1/webrtc/session/${encodeURIComponent(sessionId)}/ice`, {
+          method:"POST",
+          body: JSON.stringify({
+            from_peer_id: peerId,
+            candidate: ev.candidate.candidate,
+            sdpMid: ev.candidate.sdpMid,
+            sdpMLineIndex: ev.candidate.sdpMLineIndex
+          })
+        });
+      } catch(e){
+        log("ERR post ice " + e);
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      setState("pc=" + pc.connectionState);
+    };
+
+    if (isCaller){
+      dc = pc.createDataChannel("wm");
+      hookDc();
+    } else {
+      pc.ondatachannel = (ev) => {
+        dc = ev.channel;
+        hookDc();
+      };
+    }
+  }
+
+  function hookDc(){
+    dc.onopen = () => { chat("[dc] open"); setState("dc=open"); };
+    dc.onclose = () => { chat("[dc] close"); setState("dc=close"); };
+    dc.onmessage = (ev) => { chat("[rx] " + ev.data); };
+  }
+
+  async function startPolling(){
+    if (pollTimer) clearInterval(pollTimer);
+    pollCursor = 0;
+    pollTimer = setInterval(async () => {
+      if (!sessionId) return;
+      try {
+        const r = await api(`/v1/webrtc/session/${encodeURIComponent(sessionId)}/poll?peer_id=${encodeURIComponent(peerId)}&cursor=${pollCursor}`, {
+          method:"GET"
+        });
+        const evs = r.events || [];
+        pollCursor = r.next_cursor || pollCursor;
+
+        for (const ev of evs){
+          if (ev.type === "offer"){
+            await onOffer(ev.sdp);
+          } else if (ev.type === "answer"){
+            await onAnswer(ev.sdp);
+          } else if (ev.type === "ice"){
+            await onRemoteIce(ev);
+          }
+        }
+      } catch(e){
+        // token期限切れ等。必要なら再issueする
+      }
+    }, 700);
+  }
+
+  async function connectToSelected(){
+    if(!token || token.length < 20){
+      log("ERR token missing. issue token first.");
+      return;
+    }
+    const room_id = $("room").value.trim();
+    const toPeer = $("peerSelect").value;
+
+    if(!toPeer){
+      log("ERR select peer first.");
+      return;
+    }
+
+    // create session (caller side)
+    const r = await api("/v1/webrtc/session/create", {
+      method:"POST",
+      body: JSON.stringify({
+        room_id,
+        from_peer_id: peerId,
+        to_peer_id: toPeer
+      })
+    });
+
+    sessionId = r.session_id;
+    log("Session created: " + sessionId);
+
+    setupPc(true);
+    await startPolling();
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    await api(`/v1/webrtc/session/${encodeURIComponent(sessionId)}/offer`, {
+      method:"POST",
+      body: JSON.stringify({ from_peer_id: peerId, sdp: offer.sdp })
+    });
+
+    setState("caller: offer sent");
+  }
+
+  async function checkInbox(){
+    if(!token || token.length < 20) return;
+    const r = await api(`/v1/webrtc/inbox?peer_id=${encodeURIComponent(peerId)}`, { method:"GET" });
+    const arr = r.sessions || [];
+    if (arr.length === 0) return;
+
+    // take first session
+    if (!sessionId){
+      sessionId = arr[0];
+      log("Inbox session accepted: " + sessionId);
+      setupPc(false);
+      await startPolling();
+      setState("callee: waiting offer");
+    }
+  }
+
+  async function onOffer(sdp){
+    if (!pc) setupPc(false);
+    await pc.setRemoteDescription({ type:"offer", sdp });
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    await api(`/v1/webrtc/session/${encodeURIComponent(sessionId)}/answer`, {
+      method:"POST",
+      body: JSON.stringify({ from_peer_id: peerId, sdp: answer.sdp })
+    });
+
+    setState("callee: answer sent");
+  }
+
+  async function onAnswer(sdp){
+    await pc.setRemoteDescription({ type:"answer", sdp });
+    setState("caller: answer set");
+  }
+
+  async function onRemoteIce(ev){
+    try {
+      await pc.addIceCandidate({
+        candidate: ev.candidate,
+        sdpMid: ev.sdpMid,
+        sdpMLineIndex: ev.sdpMLineIndex
+      });
+    } catch(e){
+      // ignore
+    }
+  }
+
+  function sendMsg(){
+    const m = $("msg").value;
+    if (!dc || dc.readyState !== "open"){
+      log("ERR datachannel not open");
+      return;
+    }
+    dc.send(m);
+    chat("[tx] " + m);
+  }
+
+  // periodic inbox check (callee side)
+  setInterval(() => checkInbox().catch(()=>{}), 800);
+
+  // --------- wire buttons ----------
+  $("genKey").onclick = () => genKey().catch(e => log("ERR " + e));
+  $("register").onclick = () => register().catch(e => log("ERR " + e));
+  $("issue").onclick = () => issue().catch(e => log("ERR " + e));
+  $("start").onclick = () => startPresence().catch(e => log("ERR " + e));
+  $("refreshPeers").onclick = () => refreshPeers().catch(e => log("ERR " + e));
+  $("connect").onclick = () => connectToSelected().catch(e => log("ERR " + e));
+  $("send").onclick = () => sendMsg();
+
+  log("Ready: 鍵生成 → 登録 → トークン発行 → 起動(presence) → peers更新 → 接続 → 送信");
+  log("peer_id=" + peerId);
+</script>
+</body>
+</html>
+
