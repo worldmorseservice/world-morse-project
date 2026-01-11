@@ -75,3 +75,15 @@ the protection of amateur radio culture,
 ethical operation, and open technical learning.
 
 End of WorldMorse License v1.0
+────────────────────────────────────
+8. Governance and Authority
+────────────────────────────────────
+The authority to approve, merge, or deploy modifications
+to the core WorldMorse protocol, central services,
+or reference implementations
+is reserved exclusively to the WorldMorse Project Core Team.
+
+Forking the software is permitted under this license;
+however, operating or representing a modified version
+as an official WorldMorse service
+without explicit authorization is prohibited.
