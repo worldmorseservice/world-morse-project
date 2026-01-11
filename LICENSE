@@ -1,21 +1,77 @@
-MIT License
+WorldMorse License v1.0
 
-Copyright (c) 2025 worldmorseservice
+Copyright (c) 2026 WorldMorse Project
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+────────────────────────────────────
+1. Purpose
+────────────────────────────────────
+WorldMorse is a cultural and technical project intended to reproduce
+the operation, ethics, and experience of amateur radio CW (A1A)
+communication in a digital environment.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+This software is provided for educational, experimental,
+and amateur radio cultural purposes only.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+────────────────────────────────────
+2. Grant of Use
+────────────────────────────────────
+Permission is granted to use, study, and modify this software
+under the following conditions.
+
+────────────────────────────────────
+3. Restrictions
+────────────────────────────────────
+The following actions are strictly prohibited without explicit
+written permission from the WorldMorse Project:
+
+1. Commercial use, including but not limited to:
+   - Paid services
+   - Advertising-based services
+   - Closed-source commercial platforms
+
+2. Operating modified versions of WorldMorse servers or clients
+   without publicly disclosing the complete corresponding source code.
+
+3. Removing, bypassing, or weakening:
+   - Authentication mechanisms
+   - Anti-cheat systems
+   - Call sign verification
+   - Protocol integrity checks
+
+4. Use that violates the spirit, ethics, or cultural norms
+   of amateur radio operation, including:
+   - Intentional interference (QRM)
+   - Impersonation or call sign spoofing
+   - Logging or publishing communications without consent
+
+────────────────────────────────────
+4. Source Code Disclosure
+────────────────────────────────────
+If this software is modified and made available to others
+via a network service or distribution,
+the modified source code must be made publicly accessible
+under this same license.
+
+────────────────────────────────────
+5. No Warranty
+────────────────────────────────────
+This software is provided "AS IS", without warranty of any kind,
+express or implied, including but not limited to the warranties
+of merchantability or fitness for a particular purpose.
+
+────────────────────────────────────
+6. License Continuity
+────────────────────────────────────
+Any derivative work must:
+- Retain this license
+- Clearly indicate modifications
+- Preserve the WorldMorse name and attribution
+
+────────────────────────────────────
+7. Interpretation
+────────────────────────────────────
+The interpretation of this license prioritizes
+the protection of amateur radio culture,
+ethical operation, and open technical learning.
+
+End of WorldMorse License v1.0
